@@ -116,7 +116,26 @@ mod pa_impl {
         let mut android_data = vec![];
         while sp.ok() && !RESTARTING.load(Ordering::SeqCst) {
             sp.snapshot(|sps| {
-                sps.send(create_format_msg(crate::platform::PA_SAMPLE_RATE, 2));
+                let format_msg = create_format_msg(crate::platform::PA_SAMPLE_RATE, 2);
+                sps.send(format_msg.clone());
+                
+                // Also send format to recorder if recording is active
+                if let Some(recorder_ref) = crate::server::video_service::get_global_recorder() {
+                    if let Ok(mut recorder) = recorder_ref.lock() {
+                        if let Some(r) = recorder.as_mut() {
+                            if let Some(misc) = format_msg.misc.as_ref() {
+                                if let Some(audio_format) = misc.audio_format.as_ref() {
+                                    if let Err(e) = r.set_audio_format(audio_format) {
+                                        log::debug!("Failed to set audio format for recording: {:?}", e);
+                                    } else {
+                                        log::info!("Audio recording initialized: {} Hz, {} channels", 
+                                                  audio_format.sample_rate, audio_format.channels);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 Ok(())
             })?;
 
@@ -205,6 +224,19 @@ mod cpal_impl {
         }
         if let Some((_, format)) = &state.stream {
             sp.send_shared(format.clone());
+            
+            // Also send format to recorder if recording is active
+            if let Some(recorder_ref) = crate::server::video_service::get_global_recorder() {
+                if let Ok(mut recorder) = recorder_ref.lock() {
+                    if let Some(r) = recorder.as_mut() {
+                        if let Some(misc) = format.misc.as_ref() {
+                            if let Some(audio_format) = misc.audio_format.as_ref() {
+                                let _ = r.set_audio_format(audio_format);
+                            }
+                        }
+                    }
+                }
+            }
         }
         RESTARTING.store(false, Ordering::SeqCst);
         Ok(())
@@ -220,6 +252,19 @@ mod cpal_impl {
             }
             if let Some((_, format)) = &state.stream {
                 sps.send_shared(format.clone());
+                
+                // Also send format to recorder if recording is active
+                if let Some(recorder_ref) = crate::server::video_service::get_global_recorder() {
+                    if let Ok(mut recorder) = recorder_ref.lock() {
+                        if let Some(r) = recorder.as_mut() {
+                            if let Some(misc) = format.misc.as_ref() {
+                                if let Some(audio_format) = misc.audio_format.as_ref() {
+                                    let _ = r.set_audio_format(audio_format);
+                                }
+                            }
+                        }
+                    }
+                }
             }
             Ok(())
         })?;
@@ -496,12 +541,26 @@ fn send_f32(data: &[f32], encoder: &mut Encoder, sp: &GenericService) {
                     .encode_vec_float(&data[i * BATCH_SIZE..(i + 1) * BATCH_SIZE], BATCH_SIZE)
                 {
                     Ok(data) => {
-                        let mut msg_out = Message::new();
-                        msg_out.set_audio_frame(AudioFrame {
+                        let audio_frame = AudioFrame {
                             data: data.into(),
                             ..Default::default()
-                        });
+                        };
+                        let mut msg_out = Message::new();
+                        msg_out.set_audio_frame(audio_frame.clone());
                         sp.send(msg_out);
+                        
+                        // Also send to recorder if recording is active
+                        if let Some(recorder_ref) = crate::server::video_service::get_global_recorder() {
+                            if let Ok(mut recorder) = recorder_ref.lock() {
+                                if let Some(r) = recorder.as_mut() {
+                                    if let Err(e) = r.write_audio_frame(&audio_frame) {
+                                        log::debug!("Failed to record audio frame: {:?}", e);
+                                    } else {
+                                        log::trace!("Audio frame recorded successfully");
+                                    }
+                                }
+                            }
+                        }
                     }
                     Err(_) => {}
                 }
@@ -515,12 +574,26 @@ fn send_f32(data: &[f32], encoder: &mut Encoder, sp: &GenericService) {
     #[cfg(not(target_os = "android"))]
     match encoder.encode_vec_float(data, data.len() * 6) {
         Ok(data) => {
-            let mut msg_out = Message::new();
-            msg_out.set_audio_frame(AudioFrame {
+            let audio_frame = AudioFrame {
                 data: data.into(),
                 ..Default::default()
-            });
+            };
+            let mut msg_out = Message::new();
+            msg_out.set_audio_frame(audio_frame.clone());
             sp.send(msg_out);
+            
+            // Also send to recorder if recording is active
+            if let Some(recorder_ref) = crate::server::video_service::get_global_recorder() {
+                if let Ok(mut recorder) = recorder_ref.lock() {
+                    if let Some(r) = recorder.as_mut() {
+                        if let Err(e) = r.write_audio_frame(&audio_frame) {
+                            log::debug!("Failed to record audio frame: {:?}", e);
+                        } else {
+                            log::trace!("Audio frame recorded successfully");
+                        }
+                    }
+                }
+            }
         }
         Err(_) => {}
     }

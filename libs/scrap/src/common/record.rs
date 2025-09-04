@@ -3,7 +3,7 @@ use crate::CodecFormat;
 use hbb_common::anyhow::anyhow;
 use hbb_common::{
     bail, chrono, log,
-    message_proto::{message, video_frame, EncodedVideoFrame, Message},
+    message_proto::{message, video_frame, EncodedVideoFrame, AudioFrame, AudioFormat, Message},
     ResultType,
 };
 #[cfg(feature = "hwcodec")]
@@ -16,7 +16,7 @@ use std::{
     sync::mpsc::Sender,
     time::Instant,
 };
-use webm::mux::{self, Segment, Track, VideoTrack, Writer};
+use webm::mux::{self, Segment, Track, VideoTrack, AudioTrack, Writer};
 
 const MIN_SECS: u64 = 1;
 
@@ -77,6 +77,8 @@ pub trait RecorderApi {
     where
         Self: Sized;
     fn write_video(&mut self, frame: &EncodedVideoFrame) -> bool;
+    fn write_audio(&mut self, frame: &AudioFrame) -> bool;
+    fn set_audio_format(&mut self, format: &AudioFormat) -> bool;
 }
 
 #[derive(Debug)]
@@ -175,7 +177,37 @@ impl Recorder {
             if let Some(frame) = &vf.union {
                 self.write_frame(frame, w, h).ok();
             }
+        } else if let Some(message::Union::AudioFrame(af)) = &msg.union {
+            self.write_audio_frame(af).ok();
         }
+    }
+
+    pub fn write_audio_frame(&mut self, frame: &AudioFrame) -> ResultType<()> {
+        if self.check_failed {
+            bail!("check failed");
+        }
+        if let Some(recorder) = self.as_mut() {
+            if !recorder.write_audio(frame) {
+                bail!("Failed to write audio frame to recorder");
+            }
+        } else {
+            bail!("No recorder available for audio recording");
+        }
+        Ok(())
+    }
+
+    pub fn set_audio_format(&mut self, format: &AudioFormat) -> ResultType<()> {
+        if self.check_failed {
+            bail!("check failed");
+        }
+        if let Some(recorder) = self.as_mut() {
+            if !recorder.set_audio_format(format) {
+                bail!("Failed to set audio format in recorder");
+            }
+        } else {
+            bail!("No recorder available for setting audio format");
+        }
+        Ok(())
     }
 
     pub fn write_frame(
@@ -272,12 +304,15 @@ impl Recorder {
 
 struct WebmRecorder {
     vt: VideoTrack,
+    at: Option<AudioTrack>,
     webm: Option<Segment<Writer<File>>>,
     ctx: RecorderContext,
     ctx2: RecorderContext2,
     key: bool,
     written: bool,
     start: Instant,
+    audio_format: Option<AudioFormat>,
+    audio_frame_count: u64,
 }
 
 impl RecorderApi for WebmRecorder {
@@ -317,12 +352,15 @@ impl RecorderApi for WebmRecorder {
         }
         Ok(WebmRecorder {
             vt,
+            at: None,
             webm: Some(webm),
             ctx,
             ctx2,
             key: false,
             written: false,
             start: Instant::now(),
+            audio_format: None,
+            audio_frame_count: 0,
         })
     }
 
@@ -339,6 +377,56 @@ impl RecorderApi for WebmRecorder {
             }
             ok
         } else {
+            false
+        }
+    }
+
+    fn write_audio(&mut self, frame: &AudioFrame) -> bool {
+        if let Some(at) = &self.at {
+            if let Some(format) = &self.audio_format {
+                // Calculate timestamp based on frame count and sample rate
+                // For Opus audio in WebM, we typically use 20ms frames (960 samples at 48kHz)
+                let samples_per_frame = 960; // Opus frame size for 20ms at 48kHz
+                let timestamp_us = (self.audio_frame_count * samples_per_frame * 1_000_000) / format.sample_rate as u64;
+                
+                let ok = at.add_frame(&frame.data, timestamp_us, false);
+                if ok {
+                    self.written = true;
+                    self.audio_frame_count += 1;
+                    log::trace!("Audio frame written: count={}, timestamp={}us", self.audio_frame_count, timestamp_us);
+                }
+                ok
+            } else {
+                log::debug!("Audio format not set, cannot write frame");
+                false
+            }
+        } else {
+            log::debug!("Audio track not available, cannot write frame");
+            false
+        }
+    }
+
+    fn set_audio_format(&mut self, format: &AudioFormat) -> bool {
+        if self.audio_format.is_some() {
+            log::debug!("Audio format already set, skipping");
+            return true; // Already set, avoid recreating the track
+        }
+        
+        if let Some(webm) = &mut self.webm {
+            // Add Opus audio track to the WebM container
+            let at = webm.add_audio_track(
+                format.sample_rate as f64,
+                format.channels as u32,
+                None,
+                mux::AudioCodecId::Opus,
+            );
+            self.at = Some(at);
+            self.audio_format = Some(format.clone());
+            self.audio_frame_count = 0; // Reset frame count when format is set
+            log::info!("Audio track added to WebM: {}Hz, {} channels", format.sample_rate, format.channels);
+            true
+        } else {
+            log::error!("Cannot set audio format: WebM muxer not available");
             false
         }
     }
@@ -364,6 +452,7 @@ struct HwRecorder {
     written: bool,
     key: bool,
     start: Instant,
+    audio_format: Option<AudioFormat>,
 }
 
 #[cfg(feature = "hwcodec")]
@@ -384,6 +473,7 @@ impl RecorderApi for HwRecorder {
             written: false,
             key: false,
             start: Instant::now(),
+            audio_format: None,
         })
     }
 
@@ -404,6 +494,22 @@ impl RecorderApi for HwRecorder {
         } else {
             false
         }
+    }
+
+    fn write_audio(&mut self, frame: &AudioFrame) -> bool {
+        // For now, HwRecorder doesn't support audio in its current implementation
+        // This would require extending the hwcodec muxer to support audio
+        // We'll log this for future enhancement
+        log::debug!("HwRecorder audio writing not yet implemented");
+        true // Return true to not break the recording process
+    }
+
+    fn set_audio_format(&mut self, format: &AudioFormat) -> bool {
+        // Store the format for future use when audio support is added to hwcodec
+        self.audio_format = Some(format.clone());
+        log::debug!("HwRecorder audio format set: sample_rate={}, channels={}", 
+                   format.sample_rate, format.channels);
+        true
     }
 }
 
