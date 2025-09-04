@@ -123,9 +123,9 @@ mod pa_impl {
                 if let Some(recorder_ref) = crate::server::video_service::get_global_recorder() {
                     if let Ok(mut recorder) = recorder_ref.lock() {
                         if let Some(r) = recorder.as_mut() {
-                            if let Some(misc) = format_msg.misc.into_option() {
-                                if let Some(audio_format) = misc.audio_format.into_option() {
-                                    if let Err(e) = r.set_audio_format(&audio_format) {
+                            if let Some(misc) = format_msg.misc.as_ref() {
+                                if let Some(audio_format) = misc.audio_format.as_ref() {
+                                    if let Err(e) = r.set_audio_format(audio_format) {
                                         log::debug!("Failed to set audio format for recording: {:?}", e);
                                     } else {
                                         log::info!("Audio recording initialized: {} Hz, {} channels", 
@@ -555,6 +555,8 @@ fn send_f32(data: &[f32], encoder: &mut Encoder, sp: &GenericService) {
                                 if let Some(r) = recorder.as_mut() {
                                     if let Err(e) = r.write_audio_frame(&audio_frame) {
                                         log::debug!("Failed to record audio frame: {:?}", e);
+                                    } else {
+                                        log::trace!("Audio frame recorded successfully");
                                     }
                                 }
                             }
@@ -586,6 +588,8 @@ fn send_f32(data: &[f32], encoder: &mut Encoder, sp: &GenericService) {
                     if let Some(r) = recorder.as_mut() {
                         if let Err(e) = r.write_audio_frame(&audio_frame) {
                             log::debug!("Failed to record audio frame: {:?}", e);
+                        } else {
+                            log::trace!("Audio frame recorded successfully");
                         }
                     }
                 }

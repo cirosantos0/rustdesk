@@ -186,7 +186,13 @@ impl Recorder {
         if self.check_failed {
             bail!("check failed");
         }
-        self.as_mut().map(|x| x.write_audio(frame));
+        if let Some(recorder) = self.as_mut() {
+            if !recorder.write_audio(frame) {
+                bail!("Failed to write audio frame to recorder");
+            }
+        } else {
+            bail!("No recorder available for audio recording");
+        }
         Ok(())
     }
 
@@ -194,7 +200,13 @@ impl Recorder {
         if self.check_failed {
             bail!("check failed");
         }
-        self.as_mut().map(|x| x.set_audio_format(format));
+        if let Some(recorder) = self.as_mut() {
+            if !recorder.set_audio_format(format) {
+                bail!("Failed to set audio format in recorder");
+            }
+        } else {
+            bail!("No recorder available for setting audio format");
+        }
         Ok(())
     }
 
@@ -300,6 +312,7 @@ struct WebmRecorder {
     written: bool,
     start: Instant,
     audio_format: Option<AudioFormat>,
+    audio_frame_count: u64,
 }
 
 impl RecorderApi for WebmRecorder {
@@ -347,6 +360,7 @@ impl RecorderApi for WebmRecorder {
             written: false,
             start: Instant::now(),
             audio_format: None,
+            audio_frame_count: 0,
         })
     }
 
@@ -369,20 +383,32 @@ impl RecorderApi for WebmRecorder {
 
     fn write_audio(&mut self, frame: &AudioFrame) -> bool {
         if let Some(at) = &self.at {
-            // WebM audio frames don't use keyframes like video, so key=false and pts=0
-            // The WebM muxer handles proper timing internally
-            let ok = at.add_frame(&frame.data, 0, false);
-            if ok {
-                self.written = true;
+            if let Some(format) = &self.audio_format {
+                // Calculate timestamp based on frame count and sample rate
+                // For Opus audio in WebM, we typically use 20ms frames (960 samples at 48kHz)
+                let samples_per_frame = 960; // Opus frame size for 20ms at 48kHz
+                let timestamp_us = (self.audio_frame_count * samples_per_frame * 1_000_000) / format.sample_rate as u64;
+                
+                let ok = at.add_frame(&frame.data, timestamp_us, false);
+                if ok {
+                    self.written = true;
+                    self.audio_frame_count += 1;
+                    log::trace!("Audio frame written: count={}, timestamp={}us", self.audio_frame_count, timestamp_us);
+                }
+                ok
+            } else {
+                log::debug!("Audio format not set, cannot write frame");
+                false
             }
-            ok
         } else {
+            log::debug!("Audio track not available, cannot write frame");
             false
         }
     }
 
     fn set_audio_format(&mut self, format: &AudioFormat) -> bool {
         if self.audio_format.is_some() {
+            log::debug!("Audio format already set, skipping");
             return true; // Already set, avoid recreating the track
         }
         
@@ -396,8 +422,11 @@ impl RecorderApi for WebmRecorder {
             );
             self.at = Some(at);
             self.audio_format = Some(format.clone());
+            self.audio_frame_count = 0; // Reset frame count when format is set
+            log::info!("Audio track added to WebM: {}Hz, {} channels", format.sample_rate, format.channels);
             true
         } else {
+            log::error!("Cannot set audio format: WebM muxer not available");
             false
         }
     }
