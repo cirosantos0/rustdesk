@@ -369,7 +369,9 @@ impl RecorderApi for WebmRecorder {
 
     fn write_audio(&mut self, frame: &AudioFrame) -> bool {
         if let Some(at) = &self.at {
-            let ok = at.add_frame(&frame.data, 0, false); // WebM audio frames are not keyed
+            // WebM audio frames don't use keyframes like video, so key=false and pts=0
+            // The WebM muxer handles proper timing internally
+            let ok = at.add_frame(&frame.data, 0, false);
             if ok {
                 self.written = true;
             }
@@ -381,10 +383,11 @@ impl RecorderApi for WebmRecorder {
 
     fn set_audio_format(&mut self, format: &AudioFormat) -> bool {
         if self.audio_format.is_some() {
-            return true; // Already set
+            return true; // Already set, avoid recreating the track
         }
         
         if let Some(webm) = &mut self.webm {
+            // Add Opus audio track to the WebM container
             let at = webm.add_audio_track(
                 format.sample_rate as f64,
                 format.channels as u32,

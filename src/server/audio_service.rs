@@ -125,7 +125,12 @@ mod pa_impl {
                         if let Some(r) = recorder.as_mut() {
                             if let Some(misc) = format_msg.misc.into_option() {
                                 if let Some(audio_format) = misc.audio_format.into_option() {
-                                    let _ = r.set_audio_format(&audio_format);
+                                    if let Err(e) = r.set_audio_format(&audio_format) {
+                                        log::debug!("Failed to set audio format for recording: {:?}", e);
+                                    } else {
+                                        log::info!("Audio recording initialized: {} Hz, {} channels", 
+                                                  audio_format.sample_rate, audio_format.channels);
+                                    }
                                 }
                             }
                         }
@@ -548,7 +553,9 @@ fn send_f32(data: &[f32], encoder: &mut Encoder, sp: &GenericService) {
                         if let Some(recorder_ref) = crate::server::video_service::get_global_recorder() {
                             if let Ok(mut recorder) = recorder_ref.lock() {
                                 if let Some(r) = recorder.as_mut() {
-                                    let _ = r.write_audio_frame(&audio_frame);
+                                    if let Err(e) = r.write_audio_frame(&audio_frame) {
+                                        log::debug!("Failed to record audio frame: {:?}", e);
+                                    }
                                 }
                             }
                         }
@@ -577,7 +584,9 @@ fn send_f32(data: &[f32], encoder: &mut Encoder, sp: &GenericService) {
             if let Some(recorder_ref) = crate::server::video_service::get_global_recorder() {
                 if let Ok(mut recorder) = recorder_ref.lock() {
                     if let Some(r) = recorder.as_mut() {
-                        let _ = r.write_audio_frame(&audio_frame);
+                        if let Err(e) = r.write_audio_frame(&audio_frame) {
+                            log::debug!("Failed to record audio frame: {:?}", e);
+                        }
                     }
                 }
             }

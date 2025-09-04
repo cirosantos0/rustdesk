@@ -91,6 +91,12 @@ pub fn get_global_recorder() -> Option<Arc<Mutex<Option<Recorder>>>> {
     GLOBAL_RECORDER.lock().unwrap().clone()
 }
 
+/// Clear the global recorder when recording stops
+pub fn clear_global_recorder() {
+    *GLOBAL_RECORDER.lock().unwrap() = None;
+    log::info!("Session recording stopped - audio recording deactivated");
+}
+
 struct VideoFrameController {
     cur: Instant,
     send_conn_ids: HashSet<i32>,
@@ -993,8 +999,10 @@ fn get_recorder(
 
     // Set the global recorder reference for audio service to use
     *GLOBAL_RECORDER.lock().unwrap() = if record_incoming {
+        log::info!("Session recording enabled - audio will be captured during voice calls");
         Some(recorder.clone())
     } else {
+        log::debug!("Session recording disabled - audio recording not active");
         None
     };
 
