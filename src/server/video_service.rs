@@ -71,6 +71,8 @@ lazy_static::lazy_static! {
     pub static ref IS_UAC_RUNNING: Arc<Mutex<bool>> = Default::default();
     pub static ref IS_FOREGROUND_WINDOW_ELEVATED: Arc<Mutex<bool>> = Default::default();
     static ref SCREENSHOTS: Mutex<HashMap<usize, Screenshot>> = Default::default();
+    // Global recorder reference for sharing between video and audio services during recording
+    pub static ref GLOBAL_RECORDER: Arc<Mutex<Option<Arc<Mutex<Option<Recorder>>>>>> = Default::default();
 }
 
 struct Screenshot {
@@ -82,6 +84,11 @@ struct Screenshot {
 #[inline]
 pub fn notify_video_frame_fetched(conn_id: i32, frame_tm: Option<Instant>) {
     FRAME_FETCHED_NOTIFIER.0.send((conn_id, frame_tm)).ok();
+}
+
+/// Get the global recorder for use by other services (e.g., audio)
+pub fn get_global_recorder() -> Option<Arc<Mutex<Option<Recorder>>>> {
+    GLOBAL_RECORDER.lock().unwrap().clone()
 }
 
 struct VideoFrameController {
@@ -982,6 +989,13 @@ fn get_recorder(
         .map_or(Default::default(), |r| Arc::new(Mutex::new(Some(r))))
     } else {
         Default::default()
+    };
+
+    // Set the global recorder reference for audio service to use
+    *GLOBAL_RECORDER.lock().unwrap() = if record_incoming {
+        Some(recorder.clone())
+    } else {
+        None
     };
 
     recorder
